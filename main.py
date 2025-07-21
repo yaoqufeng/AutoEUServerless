@@ -29,14 +29,14 @@ TRUECAPTCHA_USERID = ''
 TRUECAPTCHA_APIKEY = ''
 
 
-# Gmail 邮箱 配置
-MAIL_ADDRESS = ''
+# Mail 邮箱 配置
+IMAP_SERVER = "imap.gmail.com" #   mail API 地址（如 'imap.gmail.com' 或 'outlook.office365.com'）
+MAIL_ADDRESS = '' 
 APP_PASSWORD = ''
 SENDER_FILTER = 'EUserv Support' # 无需修改
 SUBJECT_FILTER = 'EUserv - PIN for the Confirmation of a Security Check' # 无需修改
 MAX_MAILS = 10  # 无需修改
 CODE_PATTER = r"\b\d{6}\b"  # 无需修改
-
 
 # Telegram Bot 推送配置
 TG_BOT_TOKEN = "" # 改为你的Telegram机器人Token
@@ -78,7 +78,7 @@ def log(info: str):
         "API 使用次数": "📊",
         "验证码是": "🔢",
         "登录尝试": "🔑",
-        "[Gmail]": "📧",
+        "[Mail]": "📧",
         "[Captcha Solver]": "🧩",
         "[AutoEUServerless]": "🌐",
     }
@@ -309,7 +309,8 @@ def renew(
     # 等待邮件解析器解析出 PIN
     time.sleep(WAITING_TIME_OF_PIN)
     # 获取 PIN 码
-    pin = get_gmail_pin(
+    pin = get_mail_pin(
+        imap_server=IMAP_SERVER,
         mail_address=MAIL_ADDRESS,
         app_password=APP_PASSWORD,
         sender_filter=SENDER_FILTER,
@@ -320,7 +321,7 @@ def renew(
     )
     
     if pin:
-        log(f"[Gmail] PIN: {pin}")
+        log(f"[Mail] PIN: {pin}")
     else:
         raise Exception("无法获取 PIN")
     
@@ -372,11 +373,9 @@ def telegram():
         "<b>致谢：</b>\n"
         "特别感谢 <a href='https://github.com/lw9726/eu_ex'>eu_ex</a> 的贡献和启发, 本项目在此基础整理。\n"
         "开发者：<a href='https://github.com/lw9726/eu_ex'>WizisCool</a>\n"
-        "<a href='https://www.nodeseek.com/space/8902#/general'>个人Nodeseek主页</a>\n"
-        "<a href='https://dooo.ng'>个人小站Dooo.ng</a>\n\n"
         "<b>支持项目：</b>\n"
         "⭐️ 给我们一个 GitHub Star! ⭐️\n"
-        "<a href='https://github.com/WizisCool/AutoEUServerless'>访问 GitHub 项目</a>"
+        "<a href='https://github.com/Linqh-worker/AutoEUServerless'>访问 GitHub 项目</a>"
     )
 
     # 请不要删除本段版权声明, 开发不易, 感谢! 感谢!
@@ -396,7 +395,8 @@ def telegram():
         print("Telegram Bot 推送成功")
 
 
-def get_gmail_pin(
+def get_mail_pin(
+    imap_server: str,
     mail_address: str,
     app_password: str,
     sender_filter: str,
@@ -406,11 +406,12 @@ def get_gmail_pin(
     timeout: int = 15
 ) -> Optional[str]:
     """
-    从 Gmail 邮箱获取符合条件的邮件并提取 6 位 PIN 码，并标记已读。
+    从 mail 邮箱获取符合条件的邮件并提取 6 位 PIN 码，并标记已读。
 
     参数:
-        mail_address (str): Gmail 邮箱地址
-        app_password (str): Gmail 应用专用密码
+        imap_server (str): mail API 地址（如 'imap.gmail.com' 或 'outlook.office365.com'）
+        mail_address (str): mail 邮箱地址
+        app_password (str): mail 应用专用密码
         sender_filter (str): 发件人过滤条件（如 'EUserv Support'）
         subject_filter (str): 主题过滤条件（如 'EUserv - PIN for the Confirmation of a Security Check'）
         max_mails (int): 最大检查的邮件数量
@@ -422,7 +423,6 @@ def get_gmail_pin(
     """
     try:
         # 连接到 Gmail IMAP 服务器
-        imap_server = "imap.gmail.com"
         imap = imaplib.IMAP4_SSL(imap_server)
         imap.login(mail_address, app_password)
 
@@ -468,7 +468,7 @@ def get_gmail_pin(
                             match = re.search(code_pattern, body)
                             if match:
                                 pin = match.group(0)
-                                log(f"[Gmail] 找到 PIN 码: {pin}")
+                                log(f"[Mail] 找到 PIN 码: {pin}")
                                 # 标记邮件为已读
                                 imap.store(num, '+FLAGS', '\Seen')
                                 break
@@ -477,7 +477,7 @@ def get_gmail_pin(
                     match = re.search(code_pattern, body)
                     if match:
                         pin = match.group(0)
-                        log(f"[Gmail] 找到 PIN 码: {pin}")
+                        log(f"[Mail] 找到 PIN 码: {pin}")
                         # 标记邮件为已读
                         imap.store(num, '+FLAGS', '\Seen')
                         break
@@ -492,11 +492,11 @@ def get_gmail_pin(
         # 关闭连接
         imap.logout()
         if not pin:
-            log(f"[Gmail] 在 {timeout} 秒内未找到符合条件的 PIN 码")
+            log(f"[Mail] 在 {timeout} 秒内未找到符合条件的 PIN 码")
         return pin
 
     except Exception as e:
-        log(f"[Gmail] 获取 PIN 码失败: {str(e)}")
+        log(f"[Mail] 获取 PIN 码失败: {str(e)}")
         return None
 
 def main_handler(event, context):
