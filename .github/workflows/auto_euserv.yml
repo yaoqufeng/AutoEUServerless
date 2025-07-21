@@ -30,6 +30,7 @@ jobs:
           TRUECAPTCHA_APIKEY: ${{ secrets.TRUECAPTCHA_APIKEY }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_USER_ID: ${{ secrets.TG_USER_ID }}
+          IMAP_SERVER: ${{ secrets.IMAP_SERVER }}
           MAIL_ADDRESS: ${{ secrets.MAIL_ADDRESS }}
           APP_PASSWORD: ${{ secrets.APP_PASSWORD }}
         run: python Github_Action.py
