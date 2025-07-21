@@ -1,0 +1,8 @@
+#!/bin/bash
+
+day=$(date +%d)  # 获取当前日期中的“日”，01~31
+
+# 如果是每10天执行一次（第10、20、30号）
+if [[ "$day" == "10" || "$day" == "20" || "$day" == "30" ]]; then
+    /www/shell/euserv.shell
+fi

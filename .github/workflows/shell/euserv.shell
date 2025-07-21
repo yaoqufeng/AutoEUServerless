@@ -1,0 +1,13 @@
+#!/bin/bash
+
+# 进入项目目录
+cd /www/AutoEUServerless || exit
+
+# 激活虚拟环境
+source myenv/bin/activate
+
+# 运行 Python 脚本
+python3 main.py
+
+# 退出虚拟环境
+deactivate
