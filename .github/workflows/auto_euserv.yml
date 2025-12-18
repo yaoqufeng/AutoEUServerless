@@ -2,7 +2,7 @@ name: Auto EUserv
 
 on:
   schedule:
-    - cron: "27 4 18 * *" # 修改了时间：每月18号 北京时间 12:27 运行，避开高峰期
+    - cron: "27 4 18 * *" # 每月18号 北京时间 12:27
   workflow_dispatch:
 
 jobs:
@@ -11,10 +11,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4 # 升级到 v4
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5 # 升级到 v5
+        uses: actions/setup-python@v5
         with:
           python-version: "3.10"
 
@@ -24,7 +24,7 @@ jobs:
 
       - name: Run script
         id: run_script
-        continue-on-error: true # 重要：即使登录失败，也继续执行下一步以导出报错文件
+        continue-on-error: true 
         env:
           EUSERV_USERNAME: ${{ secrets.EUSERV_USERNAME }}
           EUSERV_PASSWORD: ${{ secrets.EUSERV_PASSWORD }}
@@ -38,15 +38,13 @@ jobs:
         run: python Github_Action.py
 
       - name: Upload Debug Pages
-        if: always() # 无论脚本运行成功还是失败，都执行此步骤
+        if: always() 
         uses: actions/upload-artifact@v4
         with:
           name: login-debug-files
-          path: "*.html" # 自动收集脚本生成的 error_xxx.html 文件
-          retention-days: 1 # 产物保留1天
+          path: "*.html" 
+          retention-days: 1
 
-      - name: Check Status
+      - name: Final Status
         if: steps.run_script.outcome == 'failure'
-        run: |
-          echo "脚本执行过程中出现错误，请在上方 Artifacts 处下载 html 文件查看报错详情。"
-          exit 1
+        run: exit 1
