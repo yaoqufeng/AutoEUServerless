@@ -12,6 +12,7 @@ from bs4 import BeautifulSoup
 from typing import Optional
 
 # --- 基础配置变量 ---
+# 请确保已在 GitHub Secrets 中配置以下变量
 USERNAME = os.getenv('EUSERV_USERNAME')
 PASSWORD = os.getenv('EUSERV_PASSWORD')
 TRUECAPTCHA_USERID = os.getenv('TRUECAPTCHA_USERID')
@@ -22,14 +23,11 @@ APP_PASSWORD = os.getenv('APP_PASSWORD')
 TG_BOT_TOKEN = os.getenv('TG_BOT_TOKEN')
 TG_USER_ID = os.getenv('TG_USER_ID')
 
-# --- 邮件过滤常量 (修复 NameError) ---
+# --- 邮件过滤与逻辑常量 ---
 SENDER_FILTER = 'EUserv Support'
 SUBJECT_FILTER = 'EUserv - PIN for the Confirmation of a Security Check'
 MAX_MAILS = 15
 CODE_PATTER = r"\b\d{6}\b"
-
-# --- 运行参数 ---
-LOGIN_MAX_RETRY_COUNT = 5
 WAITING_TIME_OF_PIN = 12
 SEARCH_TIMEOUT = 60
 
@@ -45,14 +43,16 @@ desp = ""
 def log(info: str):
     print(info)
     global desp
-    desp += info + "\n\n"
+    desp += info + "\n"
 
 def save_debug_page(content, filename="login_error.html"):
+    """保存报错页面源码以供调试"""
     with open(filename, "w", encoding="utf-8") as f:
         f.write(content)
     log(f"⚠️ 已保存调试页面: {filename}")
 
 def captcha_solver(captcha_image_url: str, session: requests.Session) -> str:
+    """TrueCaptcha 验证码识别"""
     try:
         response = session.get(captcha_image_url, timeout=15)
         encoded_string = base64.b64encode(response.content).decode('utf-8')
@@ -65,12 +65,14 @@ def captcha_solver(captcha_image_url: str, session: requests.Session) -> str:
         return ""
 
 def login(username, password):
+    """处理 EUserv 登录逻辑，包含动态 sess_id 提取"""
     url = "https://support.euserv.com/index.iphp"
     captcha_image_url = "https://support.euserv.com/securimage_show.php"
     session = requests.Session()
     session.headers.update(COMMON_HEADERS)
     
     try:
+        # 1. 访问首页并提取动态 sess_id
         r1 = session.get(url, timeout=20)
         sess_id_match = re.search(r'name="sess_id" value="([a-f0-9]{32,})"', r1.text)
         sess_id = sess_id_match.group(1) if sess_id_match else ""
@@ -79,8 +81,10 @@ def login(username, password):
             log("❌ 未能在页面中找到 sess_id")
             return "-1", session
 
+        # 模拟加载 Logo 资源
         session.get("https://support.euserv.com/pic/logo_small.png", timeout=10)
 
+        # 2. 提交登录请求
         login_data = {
             "email": username,
             "password": password,
@@ -89,16 +93,17 @@ def login(username, password):
             "subaction": "login",
             "sess_id": sess_id
         }
-        
         session.headers.update({'Referer': url, 'Origin': 'https://support.euserv.com'})
         r2 = session.post(url, data=login_data, timeout=20)
 
+        # 3. 如果触发了图形验证码
         if "solve the following captcha" in r2.text:
             log("🧩 发现验证码，正在识别...")
             code = captcha_solver(captcha_image_url, session)
             log(f"🔢 验证码: {code}")
             r2 = session.post(url, data={"subaction": "login", "sess_id": sess_id, "captcha_code": code}, timeout=20)
 
+        # 4. 判断登录是否成功
         if any(x in r2.text for x in ["Logout", "Hello", "customer-data"]):
             log("✅ 登录成功")
             return sess_id, session
@@ -112,22 +117,25 @@ def login(username, password):
     return "-1", session
 
 def get_servers(sess_id, session):
+    """获取合服列表及是否可续期状态"""
     d = {}
     url = f"https://support.euserv.com/index.iphp?sess_id={sess_id}"
     try:
         f = session.get(url, timeout=20)
         soup = BeautifulSoup(f.text, "html.parser")
         for tr in soup.select("#kc2_order_customer_orders_tab_content_1 .kc2_order_table tr"):
-            server_id = tr.select(".td-z1-sp1-kc")
-            if not server_id: continue
+            server_id_tag = tr.select(".td-z1-sp1-kc")
+            if not server_id_tag: continue
             action_text = tr.select(".td-z1-sp2-kc")[0].get_text()
+            # 若不包含此字样，说明可以续期
             can_renew = "Contract extension possible from" not in action_text
-            d[server_id[0].get_text()] = can_renew
+            d[server_id_tag[0].get_text()] = can_renew
     except: pass
     return d
 
 def get_mail_pin(imap_server, mail_address, app_password, sender_filter, subject_filter, max_mails, code_pattern, timeout):
-    log(f"[Mail] 正在搜索邮件 (等待最多 {timeout}s)...")
+    """从邮箱获取最新的 PIN 码并标记已读"""
+    log(f"[Mail] 正在搜索邮件 (超时: {timeout}s)...")
     try:
         imap = imaplib.IMAP4_SSL(imap_server)
         imap.login(mail_address, app_password)
@@ -139,6 +147,7 @@ def get_mail_pin(imap_server, mail_address, app_password, sender_filter, subject
             if not mail_ids:
                 time.sleep(5)
                 continue
+            # 从最新的一封开始检索
             for num in reversed(mail_ids[-max_mails:]):
                 _, msg_data = imap.fetch(num, "(RFC822)")
                 msg = email.message_from_bytes(msg_data[0][1])
@@ -154,25 +163,27 @@ def get_mail_pin(imap_server, mail_address, app_password, sender_filter, subject
                             if part.get_content_type() == "text/plain":
                                 body = part.get_payload(decode=True).decode()
                     else: body = msg.get_payload(decode=True).decode()
+                    
                     match = re.search(code_pattern, body)
                     if match:
                         pin = match.group(0)
-                        imap.store(num, '+FLAGS', '\\Seen')
+                        imap.store(num, '+FLAGS', '\\Seen') # 标记已读
                         imap.logout()
                         return pin
             time.sleep(5)
         imap.logout()
-    except Exception as e: log(f"[Mail] 错误: {e}")
+    except Exception as e: log(f"[Mail] 邮件处理错误: {e}")
     return None
 
 def renew(sess_id, session, password, order_id):
+    """执行续期操作流程"""
     url = "https://support.euserv.com/index.iphp"
-    # 1. 点击续费按钮进入详情
+    # 进入订单详情
     session.post(url, data={
         "Submit": "Extend contract", "sess_id": sess_id, "ord_no": order_id,
         "subaction": "choose_order", "choose_order_subaction": "show_contract_details",
     }, timeout=20)
-    # 2. 触发 PIN 码
+    # 触发安全检查 PIN 邮件
     session.post(url, data={
         "sess_id": sess_id, "subaction": "show_kc2_security_password_dialog",
         "prefix": "kc2_customer_contract_details_extend_contract_", "type": "1",
@@ -184,12 +195,12 @@ def renew(sess_id, session, password, order_id):
     pin = get_mail_pin(IMAP_SERVER, MAIL_ADDRESS, APP_PASSWORD, SENDER_FILTER, SUBJECT_FILTER, MAX_MAILS, CODE_PATTER, SEARCH_TIMEOUT)
     
     if not pin:
-        log("❌ 无法获取 PIN 码")
+        log("❌ 未能获取到 PIN 码")
         return False
         
-    log(f"📩 成功捕获 PIN: {pin}")
+    log(f"📩 捕获 PIN: {pin}")
     
-    # 3. 提交 PIN 获取 Token
+    # 获取提交 Token
     res = session.post(url, data={
         "auth": pin, "sess_id": sess_id, "subaction": "kc2_security_password_get_token",
         "prefix": "kc2_customer_contract_details_extend_contract_", "type": 1,
@@ -200,7 +211,7 @@ def renew(sess_id, session, password, order_id):
         res_json = res.json()
         if res_json.get("rs") == "success":
             token = res_json["token"]["value"]
-            # 4. 执行最终续期
+            # 最终确认续期
             session.post(url, data={
                 "sess_id": sess_id, "ord_id": order_id,
                 "subaction": "kc2_customer_contract_details_extend_contract_term", "token": token,
@@ -211,31 +222,39 @@ def renew(sess_id, session, password, order_id):
 
 def main_handler(event, context):
     if not USERNAME or not PASSWORD:
-        log("未配置账号")
+        log("未找到账号配置，请检查 GitHub Secrets")
         return
+    
     user_list = USERNAME.strip().split()
     passwd_list = PASSWORD.strip().split()
+    
     for i in range(len(user_list)):
-        log(f"--- 处理账号: {user_list[i]} ---")
+        log(f"--- 账号: {user_list[i]} ---")
         sessid, s = login(user_list[i], passwd_list[i])
         if sessid == "-1": continue
         
         servers = get_servers(sessid, s)
-        log(f"检测到 {len(servers)} 台服务器")
+        log(f"检测到 {len(servers)} 个 VPS 订单")
         for k, can_renew in servers.items():
             if can_renew:
-                log(f"正在续期 {k}...")
+                log(f"🚀 正在续期 ServerID: {k}...")
                 if renew(sessid, s, passwd_list[i], k):
-                    log(f"✅ {k} 续期成功")
+                    log(f"✅ {k} 续期指令执行成功")
                 else:
-                    log(f"❌ {k} 续期失败")
+                    log(f"❌ {k} 续期指令执行失败")
             else:
-                log(f"ℹ️ {k} 无需续期")
+                log(f"ℹ️ {k} 目前无需续期")
         time.sleep(5)
 
+    # 发送 Telegram 通知 (带自定义标题)
     if TG_BOT_TOKEN and TG_USER_ID:
-        requests.post(f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage", 
-                      data={"chat_id": TG_USER_ID, "text": desp, "parse_mode": "HTML"})
+        full_message = f"<b>🔔 EUServer续签日志</b>\n\n{desp}"
+        try:
+            requests.post(f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage", 
+                          data={"chat_id": TG_USER_ID, "text": full_message, "parse_mode": "HTML"},
+                          timeout=10)
+        except Exception as e:
+            print(f"TG 发送失败: {e}")
 
 if __name__ == "__main__":
     main_handler(None, None)
