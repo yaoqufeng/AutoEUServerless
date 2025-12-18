@@ -44,6 +44,7 @@ jobs:
           name: login-debug-files
           path: "*.html" 
           retention-days: 1
+          if-no-files-found: ignore # 核心修改：如果没有html文件，直接忽略不报警
 
       - name: Final Status
         if: steps.run_script.outcome == 'failure'
