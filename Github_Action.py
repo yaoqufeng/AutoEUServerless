@@ -11,7 +11,7 @@ import requests
 from bs4 import BeautifulSoup
 from typing import Optional
 
-# 环境变量获取
+# --- 基础配置变量 ---
 USERNAME = os.getenv('EUSERV_USERNAME')
 PASSWORD = os.getenv('EUSERV_PASSWORD')
 TRUECAPTCHA_USERID = os.getenv('TRUECAPTCHA_USERID')
@@ -21,6 +21,17 @@ MAIL_ADDRESS = os.getenv('MAIL_ADDRESS')
 APP_PASSWORD = os.getenv('APP_PASSWORD')
 TG_BOT_TOKEN = os.getenv('TG_BOT_TOKEN')
 TG_USER_ID = os.getenv('TG_USER_ID')
+
+# --- 邮件过滤常量 (修复 NameError) ---
+SENDER_FILTER = 'EUserv Support'
+SUBJECT_FILTER = 'EUserv - PIN for the Confirmation of a Security Check'
+MAX_MAILS = 15
+CODE_PATTER = r"\b\d{6}\b"
+
+# --- 运行参数 ---
+LOGIN_MAX_RETRY_COUNT = 5
+WAITING_TIME_OF_PIN = 12
+SEARCH_TIMEOUT = 60
 
 COMMON_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -60,20 +71,16 @@ def login(username, password):
     session.headers.update(COMMON_HEADERS)
     
     try:
-        # 1. 获取登录页，提取 HTML 里的 sess_id
         r1 = session.get(url, timeout=20)
-        # 根据你提供的源码精准匹配 43 位左右的 sess_id
         sess_id_match = re.search(r'name="sess_id" value="([a-f0-9]{32,})"', r1.text)
         sess_id = sess_id_match.group(1) if sess_id_match else ""
         
         if not sess_id:
-            log("❌ 未能在页面中找到 sess_id，请检查网络或 IP 是否被封")
+            log("❌ 未能在页面中找到 sess_id")
             return "-1", session
 
-        # 2. 模拟加载小 Logo（避开机器人检测）
         session.get("https://support.euserv.com/pic/logo_small.png", timeout=10)
 
-        # 3. 提交登录表单
         login_data = {
             "email": username,
             "password": password,
@@ -86,20 +93,18 @@ def login(username, password):
         session.headers.update({'Referer': url, 'Origin': 'https://support.euserv.com'})
         r2 = session.post(url, data=login_data, timeout=20)
 
-        # 4. 如果出现验证码
         if "solve the following captcha" in r2.text:
             log("🧩 发现验证码，正在识别...")
             code = captcha_solver(captcha_image_url, session)
             log(f"🔢 验证码: {code}")
             r2 = session.post(url, data={"subaction": "login", "sess_id": sess_id, "captcha_code": code}, timeout=20)
 
-        # 5. 结果判断
         if any(x in r2.text for x in ["Logout", "Hello", "customer-data"]):
             log("✅ 登录成功")
             return sess_id, session
         else:
             save_debug_page(r2.text, f"fail_{username[:3]}.html")
-            log("❌ 登录结果验证失败，请确认账号密码是否正确")
+            log("❌ 登录结果验证失败")
             
     except Exception as e:
         log(f"❌ 登录异常: {e}")
@@ -122,7 +127,7 @@ def get_servers(sess_id, session):
     return d
 
 def get_mail_pin(imap_server, mail_address, app_password, sender_filter, subject_filter, max_mails, code_pattern, timeout):
-    log(f"[Mail] 正在搜索邮件...")
+    log(f"[Mail] 正在搜索邮件 (等待最多 {timeout}s)...")
     try:
         imap = imaplib.IMAP4_SSL(imap_server)
         imap.login(mail_address, app_password)
@@ -131,13 +136,18 @@ def get_mail_pin(imap_server, mail_address, app_password, sender_filter, subject
         while time.time() - start_time < timeout:
             _, data = imap.search(None, "ALL")
             mail_ids = data[0].split()
-            # 核心改进：从最新的邮件开始查找
+            if not mail_ids:
+                time.sleep(5)
+                continue
             for num in reversed(mail_ids[-max_mails:]):
                 _, msg_data = imap.fetch(num, "(RFC822)")
                 msg = email.message_from_bytes(msg_data[0][1])
-                from_ = decode_header(msg.get("From"))[0][0]
-                if isinstance(from_, bytes): from_ = from_.decode()
-                if sender_filter.lower() in from_.lower() or "euserv" in from_.lower():
+                from_raw = msg.get("From")
+                from_header = decode_header(from_raw)[0][0]
+                if isinstance(from_header, bytes): from_header = from_header.decode()
+                
+                # 模糊匹配发件人
+                if "euserv" in from_header.lower():
                     body = ""
                     if msg.is_multipart():
                         for part in msg.walk():
@@ -157,27 +167,40 @@ def get_mail_pin(imap_server, mail_address, app_password, sender_filter, subject
 
 def renew(sess_id, session, password, order_id):
     url = "https://support.euserv.com/index.iphp"
+    # 1. 点击续费按钮进入详情
     session.post(url, data={
         "Submit": "Extend contract", "sess_id": sess_id, "ord_no": order_id,
         "subaction": "choose_order", "choose_order_subaction": "show_contract_details",
     }, timeout=20)
+    # 2. 触发 PIN 码
     session.post(url, data={
         "sess_id": sess_id, "subaction": "show_kc2_security_password_dialog",
         "prefix": "kc2_customer_contract_details_extend_contract_", "type": "1",
     }, timeout=20)
+    
     log("[Mail] PIN 邮件已触发，等待中...")
-    time.sleep(12)
-    pin = get_mail_pin(IMAP_SERVER, MAIL_ADDRESS, APP_PASSWORD, SENDER_FILTER, SUBJECT_FILTER, MAX_MAILS, CODE_PATTER, 60)
-    if not pin: raise Exception("无法获取 PIN")
+    time.sleep(WAITING_TIME_OF_PIN)
+    
+    pin = get_mail_pin(IMAP_SERVER, MAIL_ADDRESS, APP_PASSWORD, SENDER_FILTER, SUBJECT_FILTER, MAX_MAILS, CODE_PATTER, SEARCH_TIMEOUT)
+    
+    if not pin:
+        log("❌ 无法获取 PIN 码")
+        return False
+        
+    log(f"📩 成功捕获 PIN: {pin}")
+    
+    # 3. 提交 PIN 获取 Token
     res = session.post(url, data={
         "auth": pin, "sess_id": sess_id, "subaction": "kc2_security_password_get_token",
         "prefix": "kc2_customer_contract_details_extend_contract_", "type": 1,
         "ident": f"kc2_customer_contract_details_extend_contract_{order_id}",
     }, timeout=20)
+    
     try:
         res_json = res.json()
         if res_json.get("rs") == "success":
             token = res_json["token"]["value"]
+            # 4. 执行最终续期
             session.post(url, data={
                 "sess_id": sess_id, "ord_id": order_id,
                 "subaction": "kc2_customer_contract_details_extend_contract_term", "token": token,
@@ -187,7 +210,9 @@ def renew(sess_id, session, password, order_id):
     return False
 
 def main_handler(event, context):
-    if not USERNAME or not PASSWORD: return
+    if not USERNAME or not PASSWORD:
+        log("未配置账号")
+        return
     user_list = USERNAME.strip().split()
     passwd_list = PASSWORD.strip().split()
     for i in range(len(user_list)):
@@ -200,9 +225,12 @@ def main_handler(event, context):
         for k, can_renew in servers.items():
             if can_renew:
                 log(f"正在续期 {k}...")
-                if renew(sessid, s, passwd_list[i], k): log(f"✅ {k} 续期成功")
-                else: log(f"❌ {k} 续期失败")
-            else: log(f"ℹ️ {k} 无需续期")
+                if renew(sessid, s, passwd_list[i], k):
+                    log(f"✅ {k} 续期成功")
+                else:
+                    log(f"❌ {k} 续期失败")
+            else:
+                log(f"ℹ️ {k} 无需续期")
         time.sleep(5)
 
     if TG_BOT_TOKEN and TG_USER_ID:
