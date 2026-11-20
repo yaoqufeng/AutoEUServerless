@@ -53,10 +53,8 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          date -u +"keepalive %Y-%m-%dT%H:%M:%SZ" >> keepalive.log
-          git add keepalive.log
-          git commit -m "chore: keepalive [skip ci]" || echo "nothing to commit"
-          git push
+          git commit --allow-empty -m "chore: keep actions alive [skip ci]"
+          git push origin HEAD
 
       - name: Final Status
         if: steps.run_script.outcome == 'failure'
